@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.env
+db.sqlite3
+*.db
+*.joblib
+
+# Node.js
+node_modules/
+dist/
+.vite/
+
+# Editor
+.vscode/
+
+# Local data
+smart_building.db
+smart_building_access.db
+backend/smart_building.db
