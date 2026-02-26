@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import pandas as pd
@@ -6,6 +6,7 @@ import io
 import json
 from datetime import datetime
 from starlette.responses import StreamingResponse
+from contextlib import asynccontextmanager
 
 from database.db import get_db, init_db
 from database.access_control import simulate_access_attempt, get_recent_logs, get_security_analytics
@@ -21,7 +22,12 @@ from models.automation_rules import run_automation_engine
 from models.stress_test import run_stress_test as simulate_stress
 from models.report_generator import generate_building_report
 
-app = FastAPI(title="Smart Building AI Gateway")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+app = FastAPI(title="Smart Building AI Gateway", lifespan=lifespan)
 
 # Enable CORS
 app.add_middleware(
@@ -32,33 +38,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
-def startup_event():
-    init_db()
-
 @app.get("/")
 def read_root():
     return {"status": "online", "system": "AI Smart Building Command Center"}
 
 @app.post("/predict_comparison")
-async def predict_comparison(file: UploadFile = File(...), target_col: str = ""):
+async def predict_comparison(file: UploadFile = File(...), target_col: str = Form("")):
     """Run model comparison on an uploaded dataset."""
-    contents = await file.read()
-    df = pd.read_csv(io.BytesIO(contents))
-    
-    if target_col not in df.columns:
-        raise HTTPException(status_code=400, detail=f"Column {target_col} not found in dataset")
+    try:
+        print(f"Received file: {file.filename}, target: {target_col}")
+        contents = await file.read()
+        df = pd.read_csv(io.BytesIO(contents))
         
-    # Auto-detection for classification vs regression
-    is_numeric = pd.api.types.is_numeric_dtype(df[target_col])
-    unique_count = df[target_col].nunique()
-    
-    if is_numeric and unique_count > 10:
-        results = run_regression_comparison(df, target_col)
-    else:
-        results = run_classification_comparison(df, target_col)
+        # Case-insensitive column matching
+        target = None
+        for col in df.columns:
+            if col.strip().lower() == target_col.strip().lower():
+                target = col
+                break
         
-    return results
+        if not target:
+            print(f"Error: Column '{target_col}' not found. Available: {list(df.columns)}")
+            raise HTTPException(status_code=400, detail=f"Column '{target_col}' not found. Available: {list(df.columns)}")
+            
+        # Clean data: drop rows with NaN in target
+        df = df.dropna(subset=[target])
+        
+        # Auto-detection for classification vs regression
+        is_numeric = pd.api.types.is_numeric_dtype(df[target])
+        unique_count = df[target].nunique()
+        
+        print(f"Target '{target}' is_numeric: {is_numeric}, unique_count: {unique_count}")
+        
+        if is_numeric and unique_count > 10:
+            results = run_regression_comparison(df, target)
+        else:
+            results = run_classification_comparison(df, target)
+            
+        print(f"Benchmarking complete. Found {len(results)} models.")
+        return results
+    except Exception as e:
+        print(f"Backend Exception: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/cluster")
 async def cluster_data(file: UploadFile = File(...)):
